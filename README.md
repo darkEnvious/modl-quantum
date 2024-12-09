@@ -1,6 +1,6 @@
 # MoDL - Quantum
 
-PyTorch implementation of Quantum-Enhanced Model Based Deep Learning Architecture for Inverse Problems
+PyTorch implementation of Quantum-Enhanced Model Based Deep Learning Architecture for Inverse Problems | Used only for educational purposes
 
 Official code: https://github.com/hkaggarwal/modl
 
