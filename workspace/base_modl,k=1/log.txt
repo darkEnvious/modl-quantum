@@ -1,0 +1,7 @@
+config path: configs/base_modl,k=1.yaml
+workspace: ./workspace\base_modl,k=1
+description: base config, k=1
+
+
+train start: 2024-12-08 12:34:08
+-----------------------
