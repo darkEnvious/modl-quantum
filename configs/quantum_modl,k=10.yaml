@@ -1,5 +1,5 @@
-config_name: base_modl,k=10
-description: "base config, k=10. Restore weights from <base_modl,k=1>"
+config_name: quantum_modl,k=10
+description: "quantum config, k=10. Restore weights from <quantum_modl,k=1>"
 
 n_layers: 5
 k_iters: 3
@@ -12,10 +12,10 @@ dataset_params:
 val_data: False
 batch_size: 1
 
-model_name: base_modl
+model_name: quantum_modl
 
 restore_weights: final #False, best, inter, final
-restore_path: 'workspace/base_modl,k=1/checkpoints/'
+restore_path: 'workspace/quantum_modl,k=1/checkpoints/'
 
 loss_name: MSE
 score_names: ['PSNR', 'SSIM']

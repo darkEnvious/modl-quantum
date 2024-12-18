@@ -4,29 +4,32 @@ import torch.nn.functional as F
 from utils import r2c, c2r
 
 import pennylane as qml
-from pennylane import numpy as np
+import numpy as np
 import time
 
 # Quantum Convolutional Layer ======================
 class QuanvLayer(nn.Module):
-    def __init__(self, kernel_size=2, stride=2):
+    def __init__(self, kernel_size=2, stride=1):
         super(QuanvLayer, self).__init__()
         self.kernel_size = kernel_size
         self.stride = stride
-        self.n_channels = 2  # Input channels (real and imaginary)
-        self.n_qubits = kernel_size * kernel_size * self.n_channels
+        self.n_channels = 2  # Process both real and imaginary channels
+        self.n_qubits = kernel_size * kernel_size  # Number of qubits remains the same
         self.n_layers = 1  # Number of layers in variational circuit
 
-        # Define the quantum device
-        self.dev = qml.device('lightning.qubit', wires=self.n_qubits) # Trying Qulacs simulator | Never mind this garbage just wasted an entire 2 days of my life AND caused so much agony
+        # Define the quantum device with vectorization enabled
+        self.dev = qml.device('default.qubit', wires=self.n_qubits)
 
-        # Define the weight shapes
+        # Define the weight shapes for the quantum layer
         weight_shapes = {"weights": (self.n_layers, self.n_qubits)}
 
-        # Define the quantum circuit
-        @qml.qnode(self.dev, interface='torch')
+        # Define the quantum circuit with vectorization
+        @qml.qnode(self.dev, interface='torch', diff_method="backprop", vectorized=True)
         def circuit(inputs, weights):
-            qml.templates.AngleEmbedding(inputs, wires=range(self.n_qubits))
+            # inputs shape: (batch_size, input_size)
+            for i in range(self.n_qubits):
+                qml.RX(inputs[:, 2 * i], wires=i)
+                qml.RY(inputs[:, 2 * i + 1], wires=i)
             qml.templates.BasicEntanglerLayers(weights, wires=range(self.n_qubits))
             return [qml.expval(qml.PauliZ(wires=i)) for i in range(self.n_qubits)]
 
@@ -35,26 +38,40 @@ class QuanvLayer(nn.Module):
 
     def forward(self, x):
         batch_size, channels, height, width = x.shape
+        # x: (batch_size, 2, height, width)
 
         # Extract patches
         patches = x.unfold(2, self.kernel_size, self.stride).unfold(3, self.kernel_size, self.stride)
-        # patches shape: (batch_size, channels, n_patches_h, n_patches_w, kernel_size, kernel_size)
+        # patches shape: (batch_size, channels, new_height, new_width, kernel_size, kernel_size)
 
         n_patches_h = patches.shape[2]
         n_patches_w = patches.shape[3]
 
-        # Reshape patches to (n_patches_total, n_qubits)
-        patches = patches.permute(0, 2, 3, 1, 4, 5)
-        patches = patches.reshape(-1, self.n_channels * self.kernel_size * self.kernel_size)
+        # Move channels to last dimension and reshape
+        patches = patches.permute(0, 2, 3, 4, 5, 1)
+        # Shape: (batch_size, n_patches_h, n_patches_w, kernel_size, kernel_size, channels)
+        patches = patches.reshape(batch_size, n_patches_h * n_patches_w, -1)
+        # Shape: (batch_size, n_patches_total, input_size)
 
         # Normalize patches
-        patches_min = patches.min(dim=1, keepdim=True)[0]
-        patches_max = patches.max(dim=1, keepdim=True)[0]
+        patches_min = patches.view(batch_size, -1).min(dim=1, keepdim=True)[0].unsqueeze(-1)
+        patches_max = patches.view(batch_size, -1).max(dim=1, keepdim=True)[0].unsqueeze(-1)
         patches = (patches - patches_min) / (patches_max - patches_min + 1e-8) * np.pi
 
+        # Reshape patches to (batch_size * n_patches_total, input_size)
+        patches = patches.view(-1, self.n_channels * self.kernel_size * self.kernel_size)
+
         # Apply the quantum layer to all patches
-        outputs = self.q_layer(patches)
-        # outputs shape: (n_patches_total, n_qubits)
+        # Split patches into smaller batches to avoid memory issues
+        outputs = []
+        batch_size_patches = 1024  # Adjust this number as needed
+        total_patches = patches.shape[0]
+        for i in range(0, total_patches, batch_size_patches):
+            batch_patches = patches[i:i+batch_size_patches]
+            batch_outputs = self.q_layer(batch_patches)
+            outputs.append(batch_outputs)
+
+        outputs = torch.cat(outputs, dim=0)
 
         # Reshape back to (batch_size, n_qubits, n_patches_h, n_patches_w)
         outputs = outputs.view(batch_size, n_patches_h, n_patches_w, -1)
@@ -63,9 +80,9 @@ class QuanvLayer(nn.Module):
         return outputs
 
 # CNN Denoiser ======================
-def conv_block(in_channels, out_channels, stride=1):
+def conv_block(in_channels, out_channels):
     return nn.Sequential(
-        nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1),
+        nn.Conv2d(in_channels, out_channels, 3, padding=1),
         nn.BatchNorm2d(out_channels),
         nn.ReLU()
     )
@@ -74,29 +91,17 @@ class cnn_denoiser(nn.Module):
     def __init__(self, n_layers):
         super().__init__()
 
-        # Initial downsampling layers
-        self.initial_layers = nn.Sequential(
-            conv_block(2, 2, stride=2),  # Downsample by factor of 2 (256 -> 128)
-            conv_block(2, 2, stride=2),  # Downsample by factor of 2 (128 -> 64)
-        )
+        self.quanv = QuanvLayer(kernel_size=2, stride=1)  # Adjusted stride
 
-        # Quanvolutional layer operates on reduced dimensions
-        self.quanv = QuanvLayer(kernel_size=2, stride=2)
-
-        # Remaining layers after Quanvolutional layer
         layers = []
-        in_channels = self.quanv.n_qubits  # Update input channels to match QuanvLayer output
+        in_channels = self.quanv.n_qubits
 
         layers.append(conv_block(in_channels, 64))
 
-        # Adjust the number of layers accordingly
-        remaining_layers = n_layers - 5
-
-        for _ in range(remaining_layers):
+        for _ in range(n_layers - 2):
             layers.append(conv_block(64, 64))
 
         layers.extend([
-            nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True),  # Upsample to 232x256
             nn.Conv2d(64, 2, kernel_size=3, padding=1),
             nn.BatchNorm2d(2),
         ])
@@ -105,12 +110,16 @@ class cnn_denoiser(nn.Module):
 
     def forward(self, x):
         idt = x  # (batch_size, 2, nrow, ncol)
-        # Initial downsampling layers
-        x_down = self.initial_layers(x)  # (batch_size, 2, 64, 64)
+
         # Apply Quanvolutional layer
-        x_quanv = self.quanv(x_down)  # Output shape: depends on QuanvLayer
+        x_quanv = self.quanv(x)  # Output shape: (batch_size, n_qubits, height', width')
+
+        # Upsample to match original dimensions if needed
+        x_quanv_resized = F.interpolate(x_quanv, size=(idt.shape[2], idt.shape[3]), mode='bilinear', align_corners=True)
+
         # Pass through the remaining CNN layers
-        x_nw = self.nw(x_quanv)  # This will be upsampled back to original size
+        x_nw = self.nw(x_quanv_resized)  # This will be same size as idt
+
         # Add residual connection
         dw = x_nw + idt  # (batch_size, 2, nrow, ncol)
         return dw
