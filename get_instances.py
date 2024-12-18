@@ -23,10 +23,12 @@ def get_dataset(dataset_name, dataset_params, mode, verbose=True):
     return dataset
 
 def get_loaders(dataset_name, dataset_params, batch_size, modes, verbose=True):
-    from torch.utils.data import DataLoader
+    from torch.utils.data import DataLoader, Subset
     dataloaders = {}
     for mode in modes:
         dataset = get_dataset(dataset_name, dataset_params, mode, verbose)
+        # if mode == 'train':
+        #     dataset = Subset(dataset, range(45,85))  # Use only limited images
         shuffle = True if mode == 'train' else False
         dataloaders[mode] = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
@@ -34,9 +36,12 @@ def get_loaders(dataset_name, dataset_params, batch_size, modes, verbose=True):
 
 def get_model(model_name, model_params, device):
     if model_name == 'base_modl':
-        from models.modl import MoDL
+        from models.modl_original import MoDL
         model = MoDL(**model_params)
 
+    elif model_name == 'quantum_modl':
+        from models.modl import MoDL
+        model = MoDL(**model_params)
     # if device == 'cuda' and torch.cuda.device_count()>1:
     #     model = nn.DataParallel(model)     
     model.to(device)
@@ -108,7 +113,8 @@ class CheckpointSaver:
 
     def load_model(self, restore_path, model):
         print('loading model from {}...'.format(restore_path))
-        state_dict = torch.load(restore_path)
+        state_dict = torch.load(restore_path, weights_only=True)
+        print("Number of Parameters :", len(state_dict.keys()), state_dict.keys()==model.state_dict().keys())
         model.load_state_dict(state_dict)
         return model
 
