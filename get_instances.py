@@ -40,7 +40,11 @@ def get_model(model_name, model_params, device):
         model = MoDL(**model_params)
 
     elif model_name == 'quantum_modl':
-        from models.modl import MoDL
+        from models.modl_quantum import MoDL
+        model = MoDL(**model_params)
+
+    elif model_name == 'hybrid_modl':
+        from models.modl_hybrid import MoDL
         model = MoDL(**model_params)
     # if device == 'cuda' and torch.cuda.device_count()>1:
     #     model = nn.DataParallel(model)     
