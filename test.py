@@ -61,8 +61,11 @@ def main(args):
     start = time.time()
 
     running_score = defaultdict(int)
-    k = 50
     model.eval()
+
+    figures_dir = os.path.join(workspace, 'figures')
+    os.makedirs(figures_dir, exist_ok=True)
+
     for i, (x, y, csm, mask) in enumerate(tqdm(dataloader)):
         x, csm, mask = x.to(device), csm.to(device), mask.to(device)
 
@@ -73,10 +76,10 @@ def main(args):
         y_pred = np.abs(r2c(y_pred.numpy(), axis=1))
         for score_name, score_f in score_fs.items():
             running_score[score_name] += score_f(y, y_pred) * y_pred.shape[0]
-        # if args.write_image > 0 and (i % args.write_image == 0):
-        if k > 0 and (i % k == 0):
+        if args.write_image > 0 and (i % args.write_image == 0):
             writer.add_figure('img', display_img(np.abs(r2c(x[-1].detach().cpu().numpy())), mask[-1].detach().cpu().numpy(), y[-1], y_pred[-1], psnr(y[-1], y_pred[-1])), i)
 
+            fig = plt.figure(figsize=(10,4))
             # Noisy input data
             plt.subplot(1, 4, 2)
             plt.title("Noisy Input")
@@ -101,7 +104,8 @@ def main(args):
             plt.imshow(np.abs(y_pred[-1]), cmap='gray')
             plt.axis('off')
 
-            plt.show()
+            fig.savefig(os.path.join(figures_dir, f"test_image_{str(i // args.write_image)}.png"))
+            plt.close(fig)
 
     epoch_score = {score_name: score / len(dataloader.dataset) for score_name, score in running_score.items()}
     for score_name, score in epoch_score.items():
@@ -120,7 +124,7 @@ if __name__ == "__main__":
     parser.add_argument("--workspace", type=str, default='./workspace')
     parser.add_argument("--tensorboard_dir", type=str, default='./runs')
     parser.add_argument("--batch_size", type=int, default=None)
-    parser.add_argument("--write_image", type=int, default=0)
+    parser.add_argument("--write_image", type=int, default=50)
 
     args = parser.parse_args()
 

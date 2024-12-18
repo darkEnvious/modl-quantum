@@ -96,6 +96,8 @@ def main(args):
     if args.seed:
         set_seeds(args.seed)
 
+    losses = []
+    scores = []
     for epoch in range(start_epoch, epochs):
         for phase in phases: #['train', 'val'] or ['train']
             running_score = defaultdict(int)
@@ -106,18 +108,14 @@ def main(args):
             for i, (x, y, csm, mask) in enumerate(tqdm(dataloaders[phase])):
                 x, y, csm, mask = x.to(device), y.to(device), csm.to(device), mask.to(device)
                 with torch.set_grad_enabled(phase=='train'):
-                    start_time = time.time()
                     y_pred = model(x, csm, mask)
-                    print(f"Total Forward time: {time.time() - start_time:.8f}s")
                     loss = loss_f(y_pred, y)
 
                 if phase == 'train':
-                    start_time = time.time()
                     optimizer.zero_grad()
                     loss.backward()
-                    print(f"Total Backward time: {time.time() - start_time:.8f}s")
                     if configs['gradient_clip']:
-                        nn.utils.clip_grad_value_(model.parameters(), clip_value=1.0)
+                        nn.utils.clip_grad_value_(model.parameters(), clip_value=1.0) # Try 5.0 or higher?
                     optimizer.step()
 
                 running_score['loss'] += loss.item() * y_pred.size(0)
@@ -143,7 +141,9 @@ def main(args):
                 print('lam:', model.dc.lam.item())
                 writers['train'].add_scalar('lambda', model.dc.lam.item(), epoch)
 
-            logger.write('epoch {}/{} {} score: {:.4f}\tloss: {:.4f}'.format(epoch, epochs, phase, epoch_score[val_score_name], epoch_score['loss']))
+            scores.append(epoch_score[val_score_name])
+            losses.append(epoch_score['loss'])
+            logger.write('epoch {}/{} {} score: {:.4f}\tloss: {:.4f}\tweights: {}'.format(epoch, epochs, phase, epoch_score[val_score_name], epoch_score['loss'], weight_updates[-1]))
 
         #save model
         if phase == 'val':
@@ -156,6 +156,29 @@ def main(args):
 
     for phase in phases:
         writers[phase].close()
+
+    # Plotting graphs
+    fig = plt.figure(figsize=(12, 4))
+
+    # Loss Curve
+    plt.subplot(1, 2, 1)
+    plt.plot(losses, label='Training Loss')
+    plt.xlabel('Iterations')
+    plt.ylabel('Loss')
+    plt.title('Loss Curve')
+    plt.legend()
+
+    # Accuracy Curve
+    plt.subplot(1, 2, 2)
+    plt.plot(scores, label='Scores', color='green')
+    plt.xlabel('Epochs')
+    plt.ylabel('Score')
+    plt.title('Score Curve')
+    plt.legend()
+
+    plt.tight_layout()
+    fig.savefig(os.path.join(workspace, "training_stats.png"))
+    plt.close(fig)
         
     logger.write('-----------------------')
     logger.write('total train time: {:.2f} min'.format((time.time()-start)/60))
